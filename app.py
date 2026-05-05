@@ -32,7 +32,6 @@ def load_data():
         df.columns = df.columns.astype(str).str.strip()
         
         # Mapping to match your Looker Dashboard columns (Adjust exact names if needed)
-        # Assuming your sheet has columns somewhat similar to the image
         if 'Ticker' in df.columns and 'Symbol' not in df.columns:
             df.rename(columns={'Ticker': 'Symbol'}, inplace=True)
         if 'Screen' in df.columns and 'Type' not in df.columns:
@@ -79,7 +78,7 @@ if len(date_selection) == 2:
 else:
     filtered_df = df.copy()
 
-# 2. Type/Screen Multi-Select with Record Counts (Mimicking Looker Left Panel)
+# 2. Type/Screen Multi-Select with Record Counts
 st.sidebar.markdown("### Filter by Type (Screen)")
 type_counts = filtered_df['Type'].value_counts()
 type_options = type_counts.index.tolist()
@@ -104,14 +103,13 @@ col4.metric("High Volume Movers", len(filtered_df[filtered_df['Volume'] > filter
 
 st.divider()
 
-# Split screen into Left (1/3) and Right (2/3) to mimic the image
+# Split screen into Left (1/3) and Right (2/3)
 left_col, right_col = st.columns([1, 2.5])
 
 with left_col:
     # --- SECTION 2: LEFT PIVOT TABLE ---
     st.markdown("##### Type / Record Count Pivot")
     if not filtered_df.empty:
-        # Replicating the bottom left pivot table from your image
         pivot_df = filtered_df.groupby(['Symbol']).agg(
             Count=('Type', 'count'),
             Max_52W=('52WH', 'max')
@@ -127,7 +125,7 @@ with left_col:
             }
         )
     
-    # --- SECTION 3: MOMENTUM MATRIX (The "Beyond" Factor) ---
+    # --- SECTION 3: MOMENTUM MATRIX ---
     st.markdown("##### Momentum Matrix")
     st.caption("RSI vs Gain (Bubble Size = Volume)")
     if not filtered_df.empty:
@@ -142,47 +140,50 @@ with left_col:
 with right_col:
     # --- SECTION 4: MASTER VIEW WITH LIVE LINKS ---
     st.markdown("##### 📈 Institutional Master View")
-    # Taking top unique stocks by volume
-    master_df = filtered_df.drop_duplicates(subset=['Symbol']).sort_values(by='Volume', ascending=False).head(20)
     
-    st.dataframe(
-        master_df[['Symbol', 'LTP', 'Volume', 'RSI', '52WH', 'PCR']],
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            # This creates a clickable TradingView URL directly inside the table
-            "Symbol": st.column_config.LinkColumn(
-                "Symbol (Click for Chart)", 
-                display_text="^([A-Z0-9]+)$", 
-                url="https://in.tradingview.com/chart/?symbol=NSE:^([A-Z0-9]+)$"
-            ),
-            "LTP": st.column_config.NumberColumn("LTP", format="₹%.2f"),
-            "Volume": st.column_config.NumberColumn("Volume"),
-            "RSI": st.column_config.NumberColumn("RSI", format="%.2f"),
-        }
-    )
+    # Taking top unique stocks by volume and creating a copy to modify
+    master_df = filtered_df.drop_duplicates(subset=['Symbol']).sort_values(by='Volume', ascending=False).head(20).copy()
+    
+    if not master_df.empty:
+        # Build the actual TradingView URL in a new column BEFORE displaying
+        master_df['Chart'] = "https://in.tradingview.com/chart/?symbol=NSE:" + master_df['Symbol']
+        
+        st.dataframe(
+            master_df[['Symbol', 'Chart', 'LTP', 'Volume', 'RSI', '52WH', 'PCR']],
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Symbol": st.column_config.TextColumn("Symbol"),
+                "Chart": st.column_config.LinkColumn(
+                    "Action", 
+                    display_text="📈 View Chart"  # Makes every link look like this text
+                ),
+                "LTP": st.column_config.NumberColumn("LTP", format="₹%.2f"),
+                "Volume": st.column_config.NumberColumn("Volume"),
+                "RSI": st.column_config.NumberColumn("RSI", format="%.2f"),
+            }
+        )
 
     st.markdown("##### 🚀 Intraday Action & Gains")
     # --- SECTION 5: INTRADAY VIEW WITH INLINE PROGRESS BARS ---
-    # Replicating the bottom right table with the green inline bars
-    st.dataframe(
-        filtered_df[['Symbol', 'LTP', 'Gain', 'Volume', 'DateTime', 'RSI', 'PCR']],
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            "Symbol": st.column_config.TextColumn("Symbol"),
-            "DateTime": st.column_config.DatetimeColumn("Date/Time", format="DD-MMM HH:mm"),
-            # Replicating the exact green progress bar from Looker
-            "Gain": st.column_config.ProgressColumn(
-                "Gain %", 
-                help="Intraday Gain", 
-                format="%.2f%%", 
-                min_value=0, 
-                max_value=10 # Assuming 10% is upper circuit for visual scaling
-            ),
-            "RSI": st.column_config.NumberColumn("RSI", format="%.2f"),
-        }
-    )
+    if not filtered_df.empty:
+        st.dataframe(
+            filtered_df[['Symbol', 'LTP', 'Gain', 'Volume', 'DateTime', 'RSI', 'PCR']],
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Symbol": st.column_config.TextColumn("Symbol"),
+                "DateTime": st.column_config.DatetimeColumn("Date/Time", format="DD-MMM HH:mm"),
+                "Gain": st.column_config.ProgressColumn(
+                    "Gain %", 
+                    help="Intraday Gain", 
+                    format="%.2f%%", 
+                    min_value=0, 
+                    max_value=10 
+                ),
+                "RSI": st.column_config.NumberColumn("RSI", format="%.2f"),
+            }
+        )
 
 # ==========================================
 # GROQ AI ANALYTICS ENGINE (Bottom Expandable)
@@ -191,26 +192,29 @@ st.divider()
 with st.expander("🧠 Deep-Dive AI Analytics (Groq Llama 3.3)"):
     if st.button("Analyze Current Matrix"):
         with st.spinner("Analyzing current dataframe..."):
-            prompt = f"""
-            Act as a Senior Quant Analyst for NSE India. 
-            Here is the top data from my current screener dashboard:
-            {master_df[['Symbol', 'RSI', 'Gain', 'Volume']].head(15).to_string()}
-            
-            1. What immediate sector or volume pattern stands out?
-            2. Which 2 stocks show the most asymmetric risk/reward based on this RSI and Gain?
-            3. Provide a strict risk management warning for this specific setup.
-            """
-            try:
-                # Use your Groq API Key
-                groq_key = "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" 
-                url = "https://api.groq.com/openai/v1/chat/completions"
-                headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-                payload = {"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}]}
-                response = requests.post(url, headers=headers, json=payload, timeout=20)
+            if not master_df.empty:
+                prompt = f"""
+                Act as a Senior Quant Analyst for NSE India. 
+                Here is the top data from my current screener dashboard:
+                {master_df[['Symbol', 'RSI', 'Gain', 'Volume']].head(15).to_string()}
                 
-                if response.status_code == 200:
-                    st.write(response.json()['choices'][0]['message']['content'])
-                else:
-                    st.error("AI Engine failed to respond.")
-            except Exception as e:
-                st.error(f"Error connecting to AI: {str(e)}")
+                1. What immediate sector or volume pattern stands out?
+                2. Which 2 stocks show the most asymmetric risk/reward based on this RSI and Gain?
+                3. Provide a strict risk management warning for this specific setup.
+                """
+                try:
+                    # Use your Groq API Key
+                    groq_key = "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" 
+                    url = "https://api.groq.com/openai/v1/chat/completions"
+                    headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
+                    payload = {"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}]}
+                    response = requests.post(url, headers=headers, json=payload, timeout=20)
+                    
+                    if response.status_code == 200:
+                        st.write(response.json()['choices'][0]['message']['content'])
+                    else:
+                        st.error("AI Engine failed to respond.")
+                except Exception as e:
+                    st.error(f"Error connecting to AI: {str(e)}")
+            else:
+                st.warning("No data available to analyze.")
