@@ -11,14 +11,14 @@ st.set_page_config(page_title="HNR Command Center", page_icon="🏛️", layout=
 st_autorefresh(interval=300000, key="datarefresh") # 5 Min Auto-Refresh
 
 # ==========================================
-# AGGRESSIVE CSS: HIDE HEADERS & KILL WHITESPACE
+# AGGRESSIVE CSS: CENTER CELLS & KILL WHITESPACE
 # ==========================================
 st.markdown("""
     <style>
-    /* Hide the default Streamlit top header and menu */
+    /* Hide the default Streamlit top header */
     header {visibility: hidden !important;}
     
-    /* Erase all top/bottom padding to push content to the absolute edges */
+    /* Erase padding to push content to the absolute edges */
     .block-container { 
         padding-top: 0rem !important; 
         padding-bottom: 0rem !important; 
@@ -26,11 +26,13 @@ st.markdown("""
         max-width: 100% !important;
     }
     
-    /* Make markdown headings tighter */
-    h4, h5 { margin-bottom: 0rem !important; padding-bottom: 0.2rem !important; padding-top: 0rem !important; }
-    
-    /* Shrink the gap between elements */
-    div[data-testid="stVerticalBlock"] { gap: 0.5rem !important; }
+    /* Force Center Alignment in DataFrames */
+    div[data-testid="stDataFrame"] td {
+        text-align: center !important;
+    }
+    div[data-testid="stDataFrame"] th {
+        text-align: center !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -49,8 +51,13 @@ def load_data():
         if 'Screen' in df.columns and 'Type' not in df.columns:
             df.rename(columns={'Screen': 'Type'}, inplace=True)
             
+        # Dynamically find the date column
         date_col = 'Date' if 'Date' in df.columns else df.columns[12]
-        df['DateTime'] = pd.to_datetime(df[date_col], errors='coerce')
+        
+        # Save the raw string from the sheet to avoid 00:00 parsing issues
+        df['RawDate'] = df[date_col]
+        # Create a parsed date for background filtering only
+        df['DateTime'] = pd.to_datetime(df[date_col], errors='coerce', dayfirst=True)
         
         numeric_cols = ['LTP', 'Gain', 'Volume', 'RSI', '52WH', 'PCR']
         for col in numeric_cols:
@@ -73,7 +80,6 @@ if df.empty:
 # ==========================================
 # SIDEBAR: ADVANCED FILTERING
 # ==========================================
-# 1. Date Range Picker
 min_date = df['DateTime'].min().date() if not pd.isna(df['DateTime'].min()) else datetime.today().date()
 max_date = df['DateTime'].max().date() if not pd.isna(df['DateTime'].max()) else datetime.today().date()
 date_selection = st.sidebar.date_input("Date Range", [min_date, max_date])
@@ -85,7 +91,6 @@ if len(date_selection) == 2:
 else:
     filtered_df = df.copy()
 
-# 2. Type/Screen Multi-Select
 type_counts = filtered_df['Type'].value_counts()
 type_options = type_counts.index.tolist()
 format_func = lambda x: f"{x} ({type_counts[x]})"
@@ -93,23 +98,19 @@ selected_types = st.sidebar.multiselect("Select Categories:", type_options, defa
 filtered_df = filtered_df[filtered_df['Type'].isin(selected_types)]
 
 # ==========================================
-# 1-PAGE UI: INLINE KPI HEADER
+# 1-PAGE UI: SINGLE INLINE HEADER
 # ==========================================
-# We pack all metrics into a single text string to save massive vertical space
-kpi_string = f"**Total Records:** {len(filtered_df)} &nbsp;&nbsp;|&nbsp;&nbsp; **Unique Symbols:** {filtered_df['Symbol'].nunique()} &nbsp;&nbsp;|&nbsp;&nbsp; **Avg RSI:** {filtered_df['RSI'].mean():.1f}"
+# Cleanly formatting numbers with commas in the header
+kpi_string = f"**Total Records:** {len(filtered_df):,} &nbsp;&nbsp;|&nbsp;&nbsp; **Unique Symbols:** {filtered_df['Symbol'].nunique():,}"
 st.markdown(f"#### 🏛️ HNR Command Center &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {kpi_string}")
 
 # ==========================================
 # 1-PAGE UI: 3-COLUMN HORIZONTAL LAYOUT
 # ==========================================
-# By placing tables side-by-side, we eliminate page scrolling
 col1, col2, col3 = st.columns([1, 1.4, 1.6])
-
-# Set a strict height for tables so the tables scroll internally, but the web page NEVER scrolls
-TABLE_HEIGHT = 650 
+TABLE_HEIGHT = 700 # Pushes to the bottom of the screen to eliminate page scrolling
 
 with col1:
-    st.markdown("##### Pivot View")
     if not filtered_df.empty:
         pivot_df = filtered_df.groupby(['Symbol']).agg(
             Count=('Type', 'count'),
@@ -121,11 +122,13 @@ with col1:
             height=TABLE_HEIGHT,
             hide_index=True,
             use_container_width=True,
-            column_config={"Count": st.column_config.NumberColumn("Hits")}
+            column_config={
+                "Count": st.column_config.NumberColumn("Hits", format="%d"),
+                "Max_52W": st.column_config.NumberColumn("52WH", format="%,.1f") # Added Comma Sep
+            }
         )
 
 with col2:
-    st.markdown("##### 📈 Master View")
     master_df = filtered_df.drop_duplicates(subset=['Symbol']).sort_values(by='Volume', ascending=False).copy()
     
     if not master_df.empty:
@@ -137,28 +140,29 @@ with col2:
             use_container_width=True,
             column_config={
                 "Chart": st.column_config.LinkColumn("Action", display_text="View"),
-                "LTP": st.column_config.NumberColumn("LTP", format="₹%.1f"),
-                "RSI": st.column_config.NumberColumn("RSI", format="%.1f")
+                "LTP": st.column_config.NumberColumn("LTP", format="₹%,.1f"), # Added Comma Sep
+                "RSI": st.column_config.NumberColumn("RSI", format="%.1f"),
+                "Volume": st.column_config.NumberColumn("Volume", format="%,d") # Added Comma Sep
             }
         )
 
 with col3:
-    st.markdown("##### 🚀 Intraday Action")
     if not filtered_df.empty:
         st.dataframe(
-            filtered_df[['Symbol', 'Gain', 'LTP', 'DateTime', 'PCR']],
+            filtered_df[['Symbol', 'Gain', 'LTP', 'RawDate', 'PCR']],
             height=TABLE_HEIGHT,
             hide_index=True,
             use_container_width=True,
             column_config={
-                "DateTime": st.column_config.DatetimeColumn("Time", format="HH:mm"),
+                "RawDate": st.column_config.TextColumn("Date/Time"), # Bypasses zero-parsing
                 "Gain": st.column_config.ProgressColumn("Gain %", format="%.2f%%", min_value=0, max_value=10),
-                "LTP": st.column_config.NumberColumn("LTP", format="₹%.1f")
+                "LTP": st.column_config.NumberColumn("LTP", format="₹%,.1f"), # Added Comma Sep
+                "PCR": st.column_config.NumberColumn("PCR", format="%.2f")
             }
         )
 
 # ==========================================
-# GROQ AI ANALYTICS ENGINE (Ultra Compact)
+# GROQ AI ANALYTICS ENGINE
 # ==========================================
 if st.button("🧠 Generate AI Analysis (Groq Llama 3.3)"):
     with st.spinner("Analyzing..."):
