@@ -11,30 +11,50 @@ st.set_page_config(page_title="HNR Command Center", page_icon="🏛️", layout=
 st_autorefresh(interval=300000, key="datarefresh") # 5 Min Auto-Refresh
 
 # ==========================================
-# AGGRESSIVE CSS: CENTER CELLS & KILL WHITESPACE
+# AGGRESSIVE CSS: HIDE HEADERS & KILL WHITESPACE
 # ==========================================
 st.markdown("""
     <style>
-    /* Hide the default Streamlit top header */
     header {visibility: hidden !important;}
-    
-    /* Erase padding to push content to the absolute edges */
     .block-container { 
         padding-top: 0rem !important; 
         padding-bottom: 0rem !important; 
         margin-top: 0rem !important;
         max-width: 100% !important;
     }
-    
-    /* Force Center Alignment in DataFrames */
-    div[data-testid="stDataFrame"] td {
-        text-align: center !important;
-    }
-    div[data-testid="stDataFrame"] th {
-        text-align: center !important;
-    }
+    div[data-testid="stVerticalBlock"] { gap: 0.2rem !important; }
+    /* Hide the top margin of the markdown header */
+    h4 { margin-top: 0rem !important; padding-top: 0rem !important; }
     </style>
 """, unsafe_allow_html=True)
+
+# ==========================================
+# INDIAN NUMBER FORMATTER (Lakhs / Crores)
+# ==========================================
+def format_indian(num, is_float=False):
+    if pd.isna(num): return "0"
+    try:
+        num_val = float(num)
+        is_neg = num_val < 0
+        num_val = abs(num_val)
+        int_part = int(num_val)
+        
+        s = str(int_part)
+        if len(s) > 3:
+            last_3 = s[-3:]
+            rest = s[:-3]
+            # Split remaining numbers into groups of 2
+            chunks = [rest[max(0, i-2):i] for i in range(len(rest), 0, -2)]
+            chunks.reverse()
+            s = ",".join(chunks) + "," + last_3
+            
+        if is_float:
+            dec = f"{num_val:.1f}".split(".")[1]
+            s = f"{s}.{dec}"
+            
+        return f"-{s}" if is_neg else s
+    except:
+        return str(num)
 
 # ==========================================
 # DATA LOADING ENGINE
@@ -51,12 +71,11 @@ def load_data():
         if 'Screen' in df.columns and 'Type' not in df.columns:
             df.rename(columns={'Screen': 'Type'}, inplace=True)
             
-        # Dynamically find the date column
+        # Dynamically find date column and preserve EXACT text from Google Sheet
         date_col = 'Date' if 'Date' in df.columns else df.columns[12]
+        df['RawDate'] = df[date_col].fillna("N/A") 
         
-        # Save the raw string from the sheet to avoid 00:00 parsing issues
-        df['RawDate'] = df[date_col]
-        # Create a parsed date for background filtering only
+        # Hidden parse for the sidebar date filter only
         df['DateTime'] = pd.to_datetime(df[date_col], errors='coerce', dayfirst=True)
         
         numeric_cols = ['LTP', 'Gain', 'Volume', 'RSI', '52WH', 'PCR']
@@ -78,7 +97,7 @@ if df.empty:
     st.stop()
 
 # ==========================================
-# SIDEBAR: ADVANCED FILTERING
+# SIDEBAR FILTERS
 # ==========================================
 min_date = df['DateTime'].min().date() if not pd.isna(df['DateTime'].min()) else datetime.today().date()
 max_date = df['DateTime'].max().date() if not pd.isna(df['DateTime'].max()) else datetime.today().date()
@@ -100,66 +119,74 @@ filtered_df = filtered_df[filtered_df['Type'].isin(selected_types)]
 # ==========================================
 # 1-PAGE UI: SINGLE INLINE HEADER
 # ==========================================
-# Cleanly formatting numbers with commas in the header
-kpi_string = f"**Total Records:** {len(filtered_df):,} &nbsp;&nbsp;|&nbsp;&nbsp; **Unique Symbols:** {filtered_df['Symbol'].nunique():,}"
+kpi_string = f"**Total Records:** {format_indian(len(filtered_df))} &nbsp;&nbsp;|&nbsp;&nbsp; **Unique Symbols:** {format_indian(filtered_df['Symbol'].nunique())}"
 st.markdown(f"#### 🏛️ HNR Command Center &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {kpi_string}")
 
 # ==========================================
-# 1-PAGE UI: 3-COLUMN HORIZONTAL LAYOUT
+# HTML TABLE GENERATORS (Absolute Control)
 # ==========================================
+# Base CSS for tables ensuring perfect centering and sticky headers
+BASE_TABLE_CSS = """
+<style>
+.custom-table { width: 100%; border-collapse: collapse; font-family: sans-serif; font-size: 13px; text-align: center; }
+.custom-table th { background-color: #f8f9fa; position: sticky; top: 0; padding: 8px; border-bottom: 2px solid #ccc; text-align: center; z-index: 1;}
+.custom-table td { padding: 6px 8px; border-bottom: 1px solid #eee; text-align: center; }
+.custom-table tr:hover { background-color: #f1f3f5; }
+.scroll-box { max-height: 650px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; }
+</style>
+"""
+st.markdown(BASE_TABLE_CSS, unsafe_allow_html=True)
+
 col1, col2, col3 = st.columns([1, 1.4, 1.6])
-TABLE_HEIGHT = 700 # Pushes to the bottom of the screen to eliminate page scrolling
 
 with col1:
     if not filtered_df.empty:
-        pivot_df = filtered_df.groupby(['Symbol']).agg(
-            Count=('Type', 'count'),
-            Max_52W=('52WH', 'max')
-        ).reset_index().sort_values(by='Count', ascending=False)
-        
-        st.dataframe(
-            pivot_df,
-            height=TABLE_HEIGHT,
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "Count": st.column_config.NumberColumn("Hits", format="%d"),
-                "Max_52W": st.column_config.NumberColumn("52WH", format="%,.1f") # Added Comma Sep
-            }
-        )
+        pivot_df = filtered_df.groupby(['Symbol']).agg(Count=('Type', 'count'), Max_52W=('52WH', 'max')).reset_index().sort_values(by='Count', ascending=False)
+        html = '<div class="scroll-box"><table class="custom-table"><tr><th>Symbol</th><th>Hits</th><th>52WH</th></tr>'
+        for _, row in pivot_df.iterrows():
+            html += f'<tr><td><b>{row["Symbol"]}</b></td><td>{format_indian(row["Count"])}</td><td>{format_indian(row["Max_52W"], True)}</td></tr>'
+        html += '</table></div>'
+        st.markdown(html, unsafe_allow_html=True)
 
 with col2:
     master_df = filtered_df.drop_duplicates(subset=['Symbol']).sort_values(by='Volume', ascending=False).copy()
-    
     if not master_df.empty:
-        master_df['Chart'] = "https://in.tradingview.com/chart/?symbol=NSE:" + master_df['Symbol']
-        st.dataframe(
-            master_df[['Symbol', 'Chart', 'LTP', 'RSI', 'Volume']],
-            height=TABLE_HEIGHT,
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "Chart": st.column_config.LinkColumn("Action", display_text="View"),
-                "LTP": st.column_config.NumberColumn("LTP", format="₹%,.1f"), # Added Comma Sep
-                "RSI": st.column_config.NumberColumn("RSI", format="%.1f"),
-                "Volume": st.column_config.NumberColumn("Volume", format="%,d") # Added Comma Sep
-            }
-        )
+        html = '<div class="scroll-box"><table class="custom-table"><tr><th>Symbol</th><th>Action</th><th>LTP</th><th>RSI</th><th>Volume</th></tr>'
+        for _, row in master_df.iterrows():
+            link = f'https://in.tradingview.com/chart/?symbol=NSE:{row["Symbol"]}'
+            html += f'''<tr>
+                <td><b>{row["Symbol"]}</b></td>
+                <td><a href="{link}" target="_blank" style="text-decoration:none; color: #1f77b4;">📈 View</a></td>
+                <td>₹{format_indian(row["LTP"], True)}</td>
+                <td>{row["RSI"]:.1f}</td>
+                <td>{format_indian(row["Volume"])}</td>
+            </tr>'''
+        html += '</table></div>'
+        st.markdown(html, unsafe_allow_html=True)
 
 with col3:
     if not filtered_df.empty:
-        st.dataframe(
-            filtered_df[['Symbol', 'Gain', 'LTP', 'RawDate', 'PCR']],
-            height=TABLE_HEIGHT,
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "RawDate": st.column_config.TextColumn("Date/Time"), # Bypasses zero-parsing
-                "Gain": st.column_config.ProgressColumn("Gain %", format="%.2f%%", min_value=0, max_value=10),
-                "LTP": st.column_config.NumberColumn("LTP", format="₹%,.1f"), # Added Comma Sep
-                "PCR": st.column_config.NumberColumn("PCR", format="%.2f")
-            }
-        )
+        html = '<div class="scroll-box"><table class="custom-table"><tr><th>Symbol</th><th>Gain %</th><th>LTP</th><th>Time</th><th>PCR</th></tr>'
+        for _, row in filtered_df.iterrows():
+            try: gain_val = float(row["Gain"])
+            except: gain_val = 0.0
+            
+            # CSS Progress Bar logic
+            clamped_gain = min(max(gain_val, 0), 10) 
+            width_pct = (clamped_gain / 10) * 100
+            bar = f'''<div style="width:100%; background:#e0e0e0; border-radius:3px; text-align:left;">
+                        <div style="width:{width_pct}%; background:#26a69a; height:16px; border-radius:3px; padding-left:4px; color:white; font-size:11px; font-weight:bold; line-height:16px; white-space:nowrap;">{gain_val:.2f}%</div>
+                      </div>'''
+                      
+            html += f'''<tr>
+                <td><b>{row["Symbol"]}</b></td>
+                <td style="width: 25%;">{bar}</td>
+                <td>₹{format_indian(row["LTP"], True)}</td>
+                <td>{row["RawDate"]}</td>
+                <td>{row["PCR"]:.2f}</td>
+            </tr>'''
+        html += '</table></div>'
+        st.markdown(html, unsafe_allow_html=True)
 
 # ==========================================
 # GROQ AI ANALYTICS ENGINE
